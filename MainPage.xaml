@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="SensorApp.MainPage">
+
+    <ScrollView>
+        <VerticalStackLayout Padding="10" Spacing="10">
+            <Label Text="Lectura de sensores (en tiempo real)" FontSize="20"  HorizontalOptions="Center" />
+
+            <Label Text="Acelerómetro:" FontAttributes="Bold" />
+            <Label x:Name="AccelerometerLabel" Text="-" />
+
+            <Label Text="Giroscopio:" FontAttributes="Bold" />
+            <Label x:Name="GyroscopeLabel" Text="-" />
+
+            <Label Text="Sensor de luz:" FontAttributes="Bold" />
+            <Label x:Name="LightLabel" Text="-" />
+
+        </VerticalStackLayout>
+    </ScrollView>
+
+</ContentPage>
+
+
