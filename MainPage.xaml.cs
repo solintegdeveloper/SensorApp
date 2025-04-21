@@ -17,6 +17,8 @@ public partial class MainPage : ContentPage
     SensorListener _listener;
 #endif
 
+    private SensorDatabase _sensorDatabase = new SensorDatabase();
+
     public MainPage()
     {
         InitializeComponent();
@@ -45,6 +47,11 @@ public partial class MainPage : ContentPage
 #endif
     }
 
+    private async void OnViewHistoryClicked(object sender, EventArgs e)
+    {
+        await Navigation.PushAsync(new SensorDataPage());
+    }
+
     protected override void OnDisappearing()
     {
         base.OnDisappearing();
@@ -54,8 +61,20 @@ public partial class MainPage : ContentPage
     }
 
 #if ANDROID
-    private void OnSensorChanged(SensorEvent e)
+    private async void OnSensorChanged(SensorEvent e)
     {
+        var data = new SensorData
+        {
+            SensorType = e.Sensor.Type.ToString(),
+            Value1 = e.Values.Count > 0 ? e.Values[0] : 0,
+            Value2 = e.Values.Count > 1 ? e.Values[1] : 0,
+            Value3 = e.Values.Count > 2 ? e.Values[2] : 0,
+            //Timestamp = DateTime.UtcNow
+            Timestamp = DateTime.Now
+        };
+
+        await _sensorDatabase.SaveSensorDataAsync(data);
+
         Device.BeginInvokeOnMainThread(() =>
         {
             switch (e.Sensor.Type)

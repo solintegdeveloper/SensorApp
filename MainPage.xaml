@@ -17,6 +17,8 @@
             <Label Text="Sensor de luz:" FontAttributes="Bold" />
             <Label x:Name="LightLabel" Text="-" />
 
+            <Button Text="Ver Historial de Sensores" Clicked="OnViewHistoryClicked"/>
+
         </VerticalStackLayout>
     </ScrollView>
 
