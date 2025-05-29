@@ -47,7 +47,7 @@
                 Margin="0,20,0,0" />
 
             <Button Text="Ver Historial de Sensores" Clicked="OnViewHistoryClicked"/>
-            <Button Text="Ver historial de pasos" Clicked="OnViewDailyStepsClicked" />
+            <!--<Button Text="Ver historial de pasos" Clicked="OnViewDailyStepsClicked" />-->
 
         </VerticalStackLayout>
     </ScrollView>

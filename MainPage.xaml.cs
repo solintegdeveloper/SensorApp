@@ -256,10 +256,10 @@ public partial class MainPage : ContentPage
         CheckAndAskAgeAsync();
     }
 
-    private async void OnViewDailyStepsClicked(object sender, EventArgs e)
-    {
-        await Navigation.PushAsync(new DailyStepsPage());
-    }
+    //private async void OnViewDailyStepsClicked(object sender, EventArgs e)
+    //{
+    //    await Navigation.PushAsync(new DailyStepsPage());
+    //}
 
     private void UpdateStepsRemaining()
     {
