@@ -189,6 +189,25 @@ public partial class MainPage : ContentPage
             }
         }
 
+        //if (maxGoal > 0)
+        //{
+        //    int remaining = Math.Max(0, maxGoal - _stepCount);
+        //    StepsRemainingLabel.Text = $"Pasos restantes: {remaining}";
+
+        //    if (remaining == 0)
+        //    {
+        //        StepsRemainingLabel.TextColor = Colors.Green;
+        //    }
+        //    else
+        //    {
+        //        StepsRemainingLabel.TextColor = Colors.DarkRed;
+        //    }
+        //}
+        //else
+        //{
+        //    StepsRemainingLabel.Text = "Pasos restantes: meta no definida";
+        //    StepsRemainingLabel.TextColor = Colors.Gray;
+        //}
         if (maxGoal > 0)
         {
             int remaining = Math.Max(0, maxGoal - _stepCount);
@@ -197,19 +216,29 @@ public partial class MainPage : ContentPage
             if (remaining == 0)
             {
                 StepsRemainingLabel.TextColor = Colors.Green;
+                CheckAndShowGoalReachedMessage(_stepCount, maxGoal);
             }
             else
             {
                 StepsRemainingLabel.TextColor = Colors.DarkRed;
             }
         }
-        else
-        {
-            StepsRemainingLabel.Text = "Pasos restantes: meta no definida";
-            StepsRemainingLabel.TextColor = Colors.Gray;
-        }
+
     }
 
+    private void CheckAndShowGoalReachedMessage(int stepsToday, int dailyGoal)
+    {
+        string todayKey = $"goal_reached_{DateTime.Now:yyyyMMdd}";
+
+        if (!Preferences.ContainsKey(todayKey) && stepsToday >= dailyGoal)
+        {
+            Preferences.Set(todayKey, true); // Evita mostrarlo más de una vez
+            Device.BeginInvokeOnMainThread(async () =>
+            {
+                await DisplayAlert("¡Felicidades!", "Has alcanzado tu meta diaria de pasos. ¡Buen trabajo!", "OK");
+            });
+        }
+    }
 
 
 }
