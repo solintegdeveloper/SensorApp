@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="SensorApp.DailyStepsPage"
+             Title="Historial de Pasos">
+
+    <StackLayout Padding="10">
+
+        <Label Text="Pasos diarios" 
+           FontSize="24" 
+           HorizontalOptions="Center" 
+           Margin="0,10" />
+
+        <Button Text="Eliminar historial de pasos" 
+            BackgroundColor="Red" 
+            TextColor="White"
+            Clicked="OnClearHistoryClicked"
+            Margin="0,0,0,10" />
+
+        <CollectionView x:Name="StepsCollectionView"
+                    ItemsSource="{Binding DailyStepsList}">
+            <CollectionView.ItemTemplate>
+                <DataTemplate>
+                    <Frame BorderColor="LightGray" CornerRadius="5" Padding="10" Margin="5">
+                        <StackLayout Orientation="Horizontal" HorizontalOptions="FillAndExpand" >
+                            <Label Text="{Binding Date}" FontSize="18" HorizontalOptions="StartAndExpand"/>
+                            <Label Text="{Binding StepCount}" FontSize="18" HorizontalOptions="End" />
+                        </StackLayout>
+                    </Frame>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+
+    </StackLayout>
+
+</ContentPage>
