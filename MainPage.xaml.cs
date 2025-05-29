@@ -5,6 +5,8 @@ using Android.Content;
 using SensorApp.Platforms.Android;
 #endif
 using Microsoft.Maui.Storage;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace SensorApp;
 
@@ -21,16 +23,28 @@ public partial class MainPage : ContentPage
     private SensorDatabase _sensorDatabase = new SensorDatabase();
 
     private int _stepCount = 0;
-    private const float StepThreshold = 1.2f; // Umbral de aceleración para contar un paso
-    private long _lastStepTime = 0;
-    private const int StepDelayMs = 300; // mínimo 300 ms entre pasos para evitar falsos positivos
 
+    // Parámetros simplificados para detección de pasos
+    private const float StepThreshold = 1.5f; // Reducido para mayor sensibilidad
+    private long _lastStepTime = 0;
+    private const int StepDelayMs = 250; // Tiempo mínimo entre pasos
+
+    // Variables para filtrado básico
+    private Queue<float> _accelerationHistory = new Queue<float>();
+    private const int HistorySize = 5; // Reducido para respuesta más rápida
+    private float _baselineAcceleration = 9.8f;
+    private bool _isCalibrating = true;
+    private int _calibrationSamples = 0;
+    private const int CalibrationSampleCount = 20; // Reducido para calibración más rápida
+
+    // Detección de picos mejorada
+    private float _lastAcceleration = 0;
+    private bool _isPeakDetected = false;
 
     public MainPage()
     {
         InitializeComponent();
         CheckAndAskAgeAsync();
-
 
 #if ANDROID
         _sensorManager = (SensorManager)Android.App.Application.Context.GetSystemService(Context.SensorService);
@@ -47,41 +61,52 @@ public partial class MainPage : ContentPage
     {
         if (!Preferences.ContainsKey("user_age"))
         {
-            string result = await DisplayPromptAsync("Edad", "Por favor, ingresa tu edad:", "Aceptar", "Cancelar", keyboard: Keyboard.Numeric);
+            string ageInput = await DisplayPromptAsync("Edad", "Por favor, ingresa tu edad:");
 
-            if (int.TryParse(result, out int age))
+            if (int.TryParse(ageInput, out int age))
             {
                 Preferences.Set("user_age", age);
 
-                // Calcular meta de pasos
-                string meta;
+                int goal = 0;
+                string meta = "";
+
                 if (age >= 6 && age <= 17)
+                {
+                    goal = 12000;
                     meta = "12,000 – 15,000 pasos";
+                }
                 else if (age >= 18 && age <= 64)
+                {
+                    goal = 10000;
                     meta = "7,000 – 10,000 pasos";
+                }
                 else if (age >= 65)
+                {
+                    goal = 8000;
                     meta = "6,000 – 8,000 pasos";
+                }
                 else
+                {
                     meta = "Edad no válida";
+                }
 
-                Preferences.Set("daily_steps_goal", meta);
+                Preferences.Set("daily_steps_goal_text", meta);
+                Preferences.Set("daily_steps_goal_value", goal);
                 StepsGoalLabel.Text = $"Meta diaria: {meta}";
-
-                await DisplayAlert("Meta diaria", $"Tu meta diaria es: {meta}", "OK");
             }
             else
             {
-                await DisplayAlert("Error", "Edad inválida. Intenta nuevamente.", "OK");
-                CheckAndAskAgeAsync(); // volver a intentar
+                await DisplayAlert("Error", "Edad no válida. Intenta nuevamente.", "OK");
+                await Task.Delay(500); // Breve espera antes de volver a preguntar
+                CheckAndAskAgeAsync();
             }
         }
         else
         {
-            string storedMeta = Preferences.Get("daily_steps_goal", "Meta no definida");
-            StepsGoalLabel.Text = $"Meta diaria: {storedMeta}";
+            string savedGoalText = Preferences.Get("daily_steps_goal_text", "Meta no establecida");
+            StepsGoalLabel.Text = $"Meta diaria: {savedGoalText}";
         }
     }
-
 
 
     protected override void OnAppearing()
@@ -89,7 +114,7 @@ public partial class MainPage : ContentPage
         base.OnAppearing();
 #if ANDROID
         if (_accelerometer != null)
-            _sensorManager.RegisterListener(_listener, _accelerometer, SensorDelay.Ui);
+            _sensorManager.RegisterListener(_listener, _accelerometer, SensorDelay.Game); // Cambio a Game para mayor frecuencia
         if (_gyroscope != null)
             _sensorManager.RegisterListener(_listener, _gyroscope, SensorDelay.Ui);
         if (_light != null)
@@ -119,13 +144,10 @@ public partial class MainPage : ContentPage
             Value1 = e.Values.Count > 0 ? e.Values[0] : 0,
             Value2 = e.Values.Count > 1 ? e.Values[1] : 0,
             Value3 = e.Values.Count > 2 ? e.Values[2] : 0,
-            //Timestamp = DateTime.UtcNow
             Timestamp = DateTime.Now
         };
 
         await _sensorDatabase.SaveSensorDataAsync(data);
-
-        await _sensorDatabase.AddStepForTodayAsync();
 
         Device.BeginInvokeOnMainThread(() =>
         {
@@ -138,17 +160,11 @@ public partial class MainPage : ContentPage
                     float y = e.Values[1];
                     float z = e.Values[2];
 
+                    // Calcular la magnitud de la aceleración
                     float acceleration = (float)Math.Sqrt(x * x + y * y + z * z);
-
-                    long currentTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-                    if (acceleration > StepThreshold && currentTime - _lastStepTime > StepDelayMs)
-                    {
-                        _stepCount++;
-                        _lastStepTime = currentTime;
-                        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
-                        UpdateStepsRemaining();
-
-                    }
+                    
+                    // Procesar la detección de pasos simplificada
+                    ProcessStepDetection(acceleration);
 
                     break;
                 case SensorType.Gyroscope:
@@ -160,13 +176,83 @@ public partial class MainPage : ContentPage
             }
         });
     }
+
+    private void ProcessStepDetection(float currentAcceleration)
+    {
+        // Fase de calibración simplificada
+        if (_isCalibrating)
+        {
+            _calibrationSamples++;
+            _baselineAcceleration = (_baselineAcceleration * 0.9f) + (currentAcceleration * 0.1f);
+            
+            if (_calibrationSamples >= CalibrationSampleCount)
+            {
+                _isCalibrating = false;
+                Device.BeginInvokeOnMainThread(() =>
+                {
+                    // Removido el DisplayAlert para evitar interrupciones
+                    System.Diagnostics.Debug.WriteLine("Calibración completada");
+                });
+            }
+            return;
+        }
+
+        // Mantener historial simple
+        _accelerationHistory.Enqueue(currentAcceleration);
+        if (_accelerationHistory.Count > HistorySize)
+        {
+            _accelerationHistory.Dequeue();
+        }
+
+        // Detección de picos simplificada
+        if (_accelerationHistory.Count >= 3)
+        {
+            var recent = _accelerationHistory.ToArray();
+            float current = recent[recent.Length - 1];
+            float previous = recent[recent.Length - 2];
+            float beforePrevious = recent[recent.Length - 3];
+
+            // Detectar pico: el valor anterior es mayor que el actual y el anterior a ese
+            bool isPeak = previous > current && previous > beforePrevious;
+            
+            if (isPeak)
+            {
+                float deviation = Math.Abs(previous - _baselineAcceleration);
+                
+                if (deviation > StepThreshold)
+                {
+                    long currentTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+                    
+                    if (currentTime - _lastStepTime > StepDelayMs)
+                    {
+                        _stepCount++;
+                        _lastStepTime = currentTime;
+                        
+                        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+                        UpdateStepsRemaining();
+                        
+                        // Debug para monitoreo
+                        System.Diagnostics.Debug.WriteLine($"Paso detectado #{_stepCount}, Desviación: {deviation:F2}");
+                    }
+                }
+            }
+        }
+
+        _lastAcceleration = currentAcceleration;
+    }
 #endif
+
     private void OnResetAgeClicked(object sender, EventArgs e)
     {
         Preferences.Remove("user_age");
-        Preferences.Remove("daily_steps_goal");
+        Preferences.Remove("daily_steps_goal_text");
+        Preferences.Remove("daily_steps_goal_value");
 
         StepsGoalLabel.Text = "Meta diaria: cargando...";
+        StepsRemainingLabel.Text = "Pasos restantes: --";
+        _stepCount = 0;
+        StepCounterLabel.Text = "Pasos: 0";
+
         CheckAndAskAgeAsync();
     }
 
@@ -177,68 +263,36 @@ public partial class MainPage : ContentPage
 
     private void UpdateStepsRemaining()
     {
-        string goalText = Preferences.Get("daily_steps_goal", "");
-        int maxGoal = 0;
+        int goal = Preferences.Get("daily_steps_goal_value", 0);
 
-        if (goalText.Contains("–"))
+        if (goal > 0)
         {
-            var parts = goalText.Split('–');
-            if (int.TryParse(parts[1].Replace(" pasos", "").Replace(",", "").Trim(), out int parsedGoal))
-            {
-                maxGoal = parsedGoal;
-            }
-        }
-
-        //if (maxGoal > 0)
-        //{
-        //    int remaining = Math.Max(0, maxGoal - _stepCount);
-        //    StepsRemainingLabel.Text = $"Pasos restantes: {remaining}";
-
-        //    if (remaining == 0)
-        //    {
-        //        StepsRemainingLabel.TextColor = Colors.Green;
-        //    }
-        //    else
-        //    {
-        //        StepsRemainingLabel.TextColor = Colors.DarkRed;
-        //    }
-        //}
-        //else
-        //{
-        //    StepsRemainingLabel.Text = "Pasos restantes: meta no definida";
-        //    StepsRemainingLabel.TextColor = Colors.Gray;
-        //}
-        if (maxGoal > 0)
-        {
-            int remaining = Math.Max(0, maxGoal - _stepCount);
+            int remaining = Math.Max(0, goal - _stepCount);
             StepsRemainingLabel.Text = $"Pasos restantes: {remaining}";
 
             if (remaining == 0)
             {
                 StepsRemainingLabel.TextColor = Colors.Green;
-                CheckAndShowGoalReachedMessage(_stepCount, maxGoal);
+                CheckAndShowGoalReachedMessage(_stepCount, goal);
             }
             else
             {
                 StepsRemainingLabel.TextColor = Colors.DarkRed;
             }
         }
-
-    }
-
-    private void CheckAndShowGoalReachedMessage(int stepsToday, int dailyGoal)
-    {
-        string todayKey = $"goal_reached_{DateTime.Now:yyyyMMdd}";
-
-        if (!Preferences.ContainsKey(todayKey) && stepsToday >= dailyGoal)
+        else
         {
-            Preferences.Set(todayKey, true); // Evita mostrarlo más de una vez
-            Device.BeginInvokeOnMainThread(async () =>
-            {
-                await DisplayAlert("¡Felicidades!", "Has alcanzado tu meta diaria de pasos. ¡Buen trabajo!", "OK");
-            });
+            StepsRemainingLabel.Text = "Pasos restantes: (sin meta)";
         }
     }
 
 
+
+    private void CheckAndShowGoalReachedMessage(int steps, int goal)
+    {
+        if (steps >= goal)
+        {
+            DisplayAlert("¡Felicidades!", "Has alcanzado tu meta diaria de pasos.", "OK");
+        }
+    }
 }
