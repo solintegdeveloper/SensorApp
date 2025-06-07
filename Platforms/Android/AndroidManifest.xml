@@ -9,4 +9,8 @@
 	<uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
 	<uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
 	<uses-feature android:name="android.hardware.sensor.light" android:required="false" />
+
+	<uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+	<uses-feature android:name="android.hardware.sensor.stepcounter" android:required="false" />
+	<uses-feature android:name="android.hardware.sensor.stepdetector" android:required="false" />
 </manifest>

@@ -17,29 +17,20 @@ public partial class MainPage : ContentPage
     Sensor _accelerometer;
     Sensor _gyroscope;
     Sensor _light;
+    Sensor _stepCounter; // Nuevo sensor StepCounter
+    Sensor _stepDetector; // Opcional: para detectar pasos individuales
     SensorListener _listener;
 #endif
 
     private SensorDatabase _sensorDatabase = new SensorDatabase();
 
     private int _stepCount = 0;
+    private int _initialStepCount = 0; // Para almacenar el conteo inicial del sensor
+    private bool _isFirstStepReading = true; // Para identificar la primera lectura
 
-    // Parámetros simplificados para detección de pasos
-    private const float StepThreshold = 1.5f; // Reducido para mayor sensibilidad
-    private long _lastStepTime = 0;
-    private const int StepDelayMs = 250; // Tiempo mínimo entre pasos
-
-    // Variables para filtrado básico
-    private Queue<float> _accelerationHistory = new Queue<float>();
-    private const int HistorySize = 5; // Reducido para respuesta más rápida
-    private float _baselineAcceleration = 9.8f;
-    private bool _isCalibrating = true;
-    private int _calibrationSamples = 0;
-    private const int CalibrationSampleCount = 20; // Reducido para calibración más rápida
-
-    // Detección de picos mejorada
-    private float _lastAcceleration = 0;
-    private bool _isPeakDetected = false;
+    // Variables para detección de pasos con acelerómetro (respaldo)
+    private float _lastAccelerationBackup = 9.8f;
+    private long _lastStepTimeBackup = 0;
 
     public MainPage()
     {
@@ -51,11 +42,42 @@ public partial class MainPage : ContentPage
         _accelerometer = _sensorManager.GetDefaultSensor(SensorType.Accelerometer);
         _gyroscope = _sensorManager.GetDefaultSensor(SensorType.Gyroscope);
         _light = _sensorManager.GetDefaultSensor(SensorType.Light);
+        
+        // Inicializar sensores de pasos
+        _stepCounter = _sensorManager.GetDefaultSensor(SensorType.StepCounter);
+        _stepDetector = _sensorManager.GetDefaultSensor(SensorType.StepDetector);
 
         _listener = new SensorListener();
         _listener.OnSensorValueChanged += OnSensorChanged;
+
+        // Verificar disponibilidad de sensores de pasos
+        CheckStepSensorAvailability();
 #endif
     }
+
+#if ANDROID
+    private void CheckStepSensorAvailability()
+    {
+        if (_stepCounter == null && _stepDetector == null)
+        {
+            Device.BeginInvokeOnMainThread(async () =>
+            {
+                await DisplayAlert("Advertencia", 
+                    "Tu dispositivo no tiene sensores de pasos disponibles. " +
+                    "Se usará el acelerómetro como respaldo, pero puede ser menos preciso.", 
+                    "OK");
+            });
+        }
+        else if (_stepCounter == null)
+        {
+            System.Diagnostics.Debug.WriteLine("StepCounter no disponible, usando StepDetector");
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine("StepCounter disponible");
+        }
+    }
+#endif
 
     private async void CheckAndAskAgeAsync()
     {
@@ -97,7 +119,7 @@ public partial class MainPage : ContentPage
             else
             {
                 await DisplayAlert("Error", "Edad no válida. Intenta nuevamente.", "OK");
-                await Task.Delay(500); // Breve espera antes de volver a preguntar
+                await Task.Delay(500);
                 CheckAndAskAgeAsync();
             }
         }
@@ -106,15 +128,46 @@ public partial class MainPage : ContentPage
             string savedGoalText = Preferences.Get("daily_steps_goal_text", "Meta no establecida");
             StepsGoalLabel.Text = $"Meta diaria: {savedGoalText}";
         }
+
+        // Cargar pasos guardados del día actual
+        await LoadTodaySteps();
     }
 
+    private async Task LoadTodaySteps()
+    {
+        // Cargar los pasos guardados del día actual
+        var today = DateTime.Today;
+        var savedSteps = Preferences.Get($"steps_{today:yyyy-MM-dd}", 0);
+        var savedInitialCount = Preferences.Get($"initial_steps_{today:yyyy-MM-dd}", -1);
+
+        if (savedInitialCount != -1)
+        {
+            _initialStepCount = savedInitialCount;
+            _stepCount = savedSteps;
+            _isFirstStepReading = false;
+
+            Device.BeginInvokeOnMainThread(() =>
+            {
+                StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+                UpdateStepsRemaining();
+            });
+        }
+    }
 
     protected override void OnAppearing()
     {
         base.OnAppearing();
 #if ANDROID
+        // Registrar sensores con diferentes prioridades
+        if (_stepCounter != null)
+            _sensorManager.RegisterListener(_listener, _stepCounter, SensorDelay.Ui);
+        
+        if (_stepDetector != null)
+            _sensorManager.RegisterListener(_listener, _stepDetector, SensorDelay.Ui);
+            
+        // Mantener otros sensores
         if (_accelerometer != null)
-            _sensorManager.RegisterListener(_listener, _accelerometer, SensorDelay.Game); // Cambio a Game para mayor frecuencia
+            _sensorManager.RegisterListener(_listener, _accelerometer, SensorDelay.Game);
         if (_gyroscope != null)
             _sensorManager.RegisterListener(_listener, _gyroscope, SensorDelay.Ui);
         if (_light != null)
@@ -153,23 +206,32 @@ public partial class MainPage : ContentPage
         {
             switch (e.Sensor.Type)
             {
+                case SensorType.StepCounter:
+                    ProcessStepCounter(e.Values[0]);
+                    break;
+                    
+                case SensorType.StepDetector:
+                    ProcessStepDetector();
+                    break;
+                    
                 case SensorType.Accelerometer:
                     AccelerometerLabel.Text = $"X: {e.Values[0]:0.00}, Y: {e.Values[1]:0.00}, Z: {e.Values[2]:0.00}";
-
-                    float x = e.Values[0];
-                    float y = e.Values[1];
-                    float z = e.Values[2];
-
-                    // Calcular la magnitud de la aceleración
-                    float acceleration = (float)Math.Sqrt(x * x + y * y + z * z);
                     
-                    // Procesar la detección de pasos simplificada
-                    ProcessStepDetection(acceleration);
-
+                    // Solo usar acelerómetro si no hay sensores de pasos disponibles
+                    if (_stepCounter == null && _stepDetector == null)
+                    {
+                        float x = e.Values[0];
+                        float y = e.Values[1];
+                        float z = e.Values[2];
+                        float acceleration = (float)Math.Sqrt(x * x + y * y + z * z);
+                        ProcessAccelerometerStepDetection(acceleration);
+                    }
                     break;
+                    
                 case SensorType.Gyroscope:
                     GyroscopeLabel.Text = $"X: {e.Values[0]:0.00}, Y: {e.Values[1]:0.00}, Z: {e.Values[2]:0.00}";
                     break;
+                    
                 case SensorType.Light:
                     LightLabel.Text = $"{e.Values[0]:0.00} lux";
                     break;
@@ -177,68 +239,90 @@ public partial class MainPage : ContentPage
         });
     }
 
-    private void ProcessStepDetection(float currentAcceleration)
+    private void ProcessStepCounter(float sensorStepCount)
     {
-        // Fase de calibración simplificada
-        if (_isCalibrating)
+        var today = DateTime.Today;
+        
+        if (_isFirstStepReading)
         {
-            _calibrationSamples++;
-            _baselineAcceleration = (_baselineAcceleration * 0.9f) + (currentAcceleration * 0.1f);
+            // Primera lectura del día: establecer el conteo inicial
+            _initialStepCount = (int)sensorStepCount;
+            _isFirstStepReading = false;
             
-            if (_calibrationSamples >= CalibrationSampleCount)
-            {
-                _isCalibrating = false;
-                Device.BeginInvokeOnMainThread(() =>
-                {
-                    // Removido el DisplayAlert para evitar interrupciones
-                    System.Diagnostics.Debug.WriteLine("Calibración completada");
-                });
-            }
-            return;
-        }
-
-        // Mantener historial simple
-        _accelerationHistory.Enqueue(currentAcceleration);
-        if (_accelerationHistory.Count > HistorySize)
-        {
-            _accelerationHistory.Dequeue();
-        }
-
-        // Detección de picos simplificada
-        if (_accelerationHistory.Count >= 3)
-        {
-            var recent = _accelerationHistory.ToArray();
-            float current = recent[recent.Length - 1];
-            float previous = recent[recent.Length - 2];
-            float beforePrevious = recent[recent.Length - 3];
-
-            // Detectar pico: el valor anterior es mayor que el actual y el anterior a ese
-            bool isPeak = previous > current && previous > beforePrevious;
+            // Guardar el conteo inicial del día
+            Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
             
-            if (isPeak)
+            System.Diagnostics.Debug.WriteLine($"Conteo inicial del sensor: {_initialStepCount}");
+        }
+        
+        // Calcular pasos del día actual
+        int currentDaySteps = (int)sensorStepCount - _initialStepCount;
+        
+        // Asegurar que no sea negativo (en caso de reinicio del sensor)
+        if (currentDaySteps < 0)
+        {
+            _initialStepCount = (int)sensorStepCount;
+            currentDaySteps = 0;
+            Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
+        }
+        
+        _stepCount = currentDaySteps;
+        
+        // Guardar pasos del día actual
+        Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
+        
+        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+        UpdateStepsRemaining();
+        
+        System.Diagnostics.Debug.WriteLine($"Pasos hoy: {_stepCount} (Sensor: {sensorStepCount}, Inicial: {_initialStepCount})");
+    }
+
+    private void ProcessStepDetector()
+    {
+        var today = DateTime.Today;
+        
+        // StepDetector se activa una vez por cada paso detectado
+        _stepCount++;
+        
+        // Guardar pasos del día actual
+        Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
+        
+        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+        UpdateStepsRemaining();
+        
+        System.Diagnostics.Debug.WriteLine($"Paso detectado por StepDetector. Total: {_stepCount}");
+    }
+
+    // Método de respaldo usando acelerómetro (código original simplificado)
+    private void ProcessAccelerometerStepDetection(float currentAcceleration)
+    {
+        // Implementación simplificada del método original
+        // Solo se usa si no hay sensores de pasos disponibles
+        const float threshold = 1.5f;
+        const int stepDelayMs = 250;
+        
+        float deviation = Math.Abs(currentAcceleration - 9.8f);
+        
+        if (deviation > threshold && currentAcceleration < _lastAccelerationBackup)
+        {
+            long currentTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+            
+            if (currentTime - _lastStepTimeBackup > stepDelayMs)
             {
-                float deviation = Math.Abs(previous - _baselineAcceleration);
+                var today = DateTime.Today;
+                _stepCount++;
+                _lastStepTimeBackup = currentTime;
                 
-                if (deviation > StepThreshold)
-                {
-                    long currentTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-                    
-                    if (currentTime - _lastStepTime > StepDelayMs)
-                    {
-                        _stepCount++;
-                        _lastStepTime = currentTime;
-                        
-                        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
-                        UpdateStepsRemaining();
-                        
-                        // Debug para monitoreo
-                        System.Diagnostics.Debug.WriteLine($"Paso detectado #{_stepCount}, Desviación: {deviation:F2}");
-                    }
-                }
+                Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
+                
+                StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+                UpdateStepsRemaining();
+                
+                System.Diagnostics.Debug.WriteLine($"Paso detectado por acelerómetro (respaldo). Total: {_stepCount}");
             }
         }
-
-        _lastAcceleration = currentAcceleration;
+        
+        _lastAccelerationBackup = currentAcceleration;
     }
 #endif
 
@@ -256,10 +340,28 @@ public partial class MainPage : ContentPage
         CheckAndAskAgeAsync();
     }
 
-    //private async void OnViewDailyStepsClicked(object sender, EventArgs e)
-    //{
-    //    await Navigation.PushAsync(new DailyStepsPage());
-    //}
+    private async void OnResetStepsClicked(object sender, EventArgs e)
+    {
+        var result = await DisplayAlert("Confirmar",
+            "¿Estás seguro de que quieres reiniciar el contador de pasos de hoy?",
+            "Sí", "No");
+
+        if (result)
+        {
+            var today = DateTime.Today;
+            _stepCount = 0;
+            _isFirstStepReading = true;
+
+            // Limpiar preferencias del día actual
+            Preferences.Remove($"steps_{today:yyyy-MM-dd}");
+            Preferences.Remove($"initial_steps_{today:yyyy-MM-dd}");
+
+            StepCounterLabel.Text = "Pasos dados: 0";
+            UpdateStepsRemaining();
+
+            System.Diagnostics.Debug.WriteLine("Contador de pasos reiniciado");
+        }
+    }
 
     private void UpdateStepsRemaining()
     {
@@ -285,8 +387,6 @@ public partial class MainPage : ContentPage
             StepsRemainingLabel.Text = "Pasos restantes: (sin meta)";
         }
     }
-
-
 
     private void CheckAndShowGoalReachedMessage(int steps, int goal)
     {
