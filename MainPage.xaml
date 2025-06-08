@@ -49,6 +49,19 @@
             <Button Text="Ver Historial de Sensores" Clicked="OnViewHistoryClicked"/>
             <!--<Button Text="Ver historial de pasos" Clicked="OnViewDailyStepsClicked" />-->
 
+            <!-- Botones de debug - agregar temporalmente -->
+            <Button x:Name="TestSensorButton" 
+            Text="Probar Sensor" 
+            Clicked="OnTestSensorClicked" />
+
+                <Button x:Name="SimulateStepsButton" 
+            Text="Simular Pasos" 
+            Clicked="OnSimulateStepsClicked" />
+
+                <Button x:Name="CheckStatusButton" 
+            Text="Verificar Estado" 
+            Clicked="OnCheckSensorStatusClicked" />
+            
         </VerticalStackLayout>
     </ScrollView>
 
