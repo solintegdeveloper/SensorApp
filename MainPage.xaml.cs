@@ -470,6 +470,7 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // ====== MÉTODO MEJORADO PARA PROCESAR EVENTOS DE STEP COUNTER ======
     private void ProcessStepCounterEvent(SensorEvent e)
     {
         try
@@ -501,13 +502,22 @@ public partial class MainPage : ContentPage
 
             currentDaySteps = ValidateStepCount(currentDaySteps);
 
+            // CAMBIO IMPORTANTE: Actualizar SIEMPRE si hay diferencia, aunque sea pequeña
             if (currentDaySteps != _stepCount)
             {
+                int previousSteps = _stepCount;
                 _stepCount = Math.Max(currentDaySteps, _stepCount);
                 Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
 
-                System.Diagnostics.Debug.WriteLine($"Actualizando pasos: {_stepCount}");
+                System.Diagnostics.Debug.WriteLine($"*** CAMBIO DETECTADO: {previousSteps} → {_stepCount} ***");
+                System.Diagnostics.Debug.WriteLine($"*** FORZANDO ACTUALIZACIÓN DE UI ***");
+
+                // Forzar actualización inmediata del UI
                 UpdateUI();
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"Sin cambios en pasos: {_stepCount}");
             }
         }
         catch (Exception ex)
@@ -516,6 +526,136 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // Método para verificar estado de los Labels
+    private async void OnVerifyLabelsClicked(object sender, EventArgs e)
+    {
+        try
+        {
+            var status = new System.Text.StringBuilder();
+            status.AppendLine("=== ESTADO DE CONTROLES ===\n");
+
+            status.AppendLine($"StepCounterLabel: {(StepCounterLabel != null ? "✓ Conectado" : "✗ NULL")}");
+            if (StepCounterLabel != null)
+            {
+                status.AppendLine($"  Texto: '{StepCounterLabel.Text}'");
+            }
+
+            status.AppendLine($"StepsGoalLabel: {(StepsGoalLabel != null ? "✓ Conectado" : "✗ NULL")}");
+            status.AppendLine($"StepsRemainingLabel: {(StepsRemainingLabel != null ? "✓ Conectado" : "✗ NULL")}");
+
+            status.AppendLine($"\nPasos en memoria: {_stepCount}");
+            status.AppendLine($"Valor inicial: {_initialStepCount}");
+
+            await DisplayAlert("Estado de Controles", status.ToString(), "OK");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnVerifyLabelsClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error al verificar controles", "OK");
+        }
+    }
+
+    // Método para probar actualización del UI
+    private async void OnTestUIUpdateClicked(object sender, EventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Debug.WriteLine("*** PROBANDO ACTUALIZACIÓN DE UI ***");
+
+            int oldSteps = _stepCount;
+            _stepCount += 3;
+
+            var today = DateTime.Today;
+            Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
+
+            // Actualizar UI directamente
+            if (StepCounterLabel != null)
+            {
+                StepCounterLabel.Text = $"Pasos dados: {FormatStepCount(_stepCount)}";
+            }
+            UpdateStepsRemaining();
+
+            await DisplayAlert("Test UI",
+                $"Pasos incrementados en 3\n" +
+                $"Anterior: {oldSteps}\n" +
+                $"Actual: {_stepCount}", "OK");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnTestUIUpdateClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en test", "OK");
+        }
+    }
+
+    // Método para monitorear el sensor
+    private async void OnMonitorSensorClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            var status = new System.Text.StringBuilder();
+            status.AppendLine("=== MONITOR DEL SENSOR ===\n");
+
+            status.AppendLine($"Sensor activo: {(_isListenerActive ? "✓ Sí" : "✗ No")}");
+            status.AppendLine($"Tipo de sensor: {(_useStepDetector ? "Step Detector" : "Step Counter")}");
+
+            var timeSinceUpdate = DateTime.Now - _lastSensorUpdate;
+            status.AppendLine($"Última actualización: {timeSinceUpdate.TotalSeconds:F1}s atrás");
+
+            status.AppendLine($"Pasos actuales: {_stepCount}");
+            status.AppendLine($"Valor inicial: {_initialStepCount}");
+
+            if (timeSinceUpdate.TotalMinutes > 5)
+            {
+                status.AppendLine("\n⚠️ El sensor parece inactivo");
+                status.AppendLine("Intenta caminar un poco y vuelve a verificar");
+            }
+            else
+            {
+                status.AppendLine("\n✓ El sensor está funcionando");
+            }
+
+            await DisplayAlert("Monitor Sensor", status.ToString(), "OK");
+#else
+            await DisplayAlert("Info", "Solo disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnMonitorSensorClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en monitor", "OK");
+        }
+    }
+
+    // Método simple para refrescar UI manualmente
+    private async void OnForceRefreshClicked(object sender, EventArgs e)
+    {
+        try
+        {
+            System.Diagnostics.Debug.WriteLine("*** REFRESCANDO UI MANUALMENTE ***");
+
+            // Recargar datos guardados
+            LoadSavedSteps();
+
+            // Actualizar UI
+            if (StepCounterLabel != null)
+            {
+                StepCounterLabel.Text = $"Pasos dados: {FormatStepCount(_stepCount)}";
+            }
+            UpdateStepsRemaining();
+
+            await DisplayAlert("UI Actualizado",
+                $"Pasos: {FormatStepCount(_stepCount)}\n" +
+                $"Inicial: {_initialStepCount}", "OK");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnForceRefreshClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error al refrescar", "OK");
+        }
+    }
+
+    // ====== MÉTODO MEJORADO PARA PROCESAR EVENTOS DE STEP DETECTOR ======
     private void ProcessStepDetectorEvent(SensorEvent e)
     {
         try
@@ -524,10 +664,14 @@ public partial class MainPage : ContentPage
             System.Diagnostics.Debug.WriteLine($"Paso detectado - incrementando contador");
 
             var today = DateTime.Today;
+            int previousSteps = _stepCount;
             _stepCount++;
             Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
 
-            System.Diagnostics.Debug.WriteLine($"Pasos totales: {_stepCount}");
+            System.Diagnostics.Debug.WriteLine($"*** PASO DETECTADO: {previousSteps} → {_stepCount} ***");
+            System.Diagnostics.Debug.WriteLine($"*** FORZANDO ACTUALIZACIÓN DE UI ***");
+
+            // Forzar actualización inmediata del UI
             UpdateUI();
         }
         catch (Exception ex)
@@ -536,26 +680,60 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // ====== MÉTODO ACTUALIZADO PARA UpdateUI (SIN ERRORES) ======
     private void UpdateUI()
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        try
         {
-            try
+            // Asegurar que se ejecute en el hilo principal
+            if (MainThread.IsMainThread)
             {
-                if (StepCounterLabel != null)
+                UpdateUIInternal();
+            }
+            else
+            {
+                MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    StepCounterLabel.Text = $"Pasos dados: {FormatStepCount(_stepCount)}";
-                }
-                UpdateStepsRemaining();
-                System.Diagnostics.Debug.WriteLine($"UI actualizada: {_stepCount} pasos");
+                    UpdateUIInternal();
+                });
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error actualizando UI: {ex.Message}");
-            }
-        });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en UpdateUI: {ex.Message}");
+        }
     }
 
+    private void UpdateUIInternal()
+    {
+        try
+        {
+            System.Diagnostics.Debug.WriteLine($"*** ACTUALIZANDO UI - Pasos: {_stepCount} ***");
+
+            // Actualizar label de pasos
+            if (StepCounterLabel != null)
+            {
+                var formattedSteps = FormatStepCount(_stepCount);
+                StepCounterLabel.Text = $"Pasos dados: {formattedSteps}";
+                System.Diagnostics.Debug.WriteLine($"Label actualizado: {StepCounterLabel.Text}");
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("*** WARNING: StepCounterLabel es NULL ***");
+            }
+
+            // Actualizar pasos restantes
+            UpdateStepsRemaining();
+
+            System.Diagnostics.Debug.WriteLine($"*** UI ACTUALIZADA CORRECTAMENTE ***");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en UpdateUIInternal: {ex.Message}");
+        }
+    }
+
+    
     // Método para verificar si los sensores están disponibles
     private void CheckSensorAvailability()
     {
