@@ -18,6 +18,7 @@ namespace SensorApp;
 
 public partial class MainPage : ContentPage
 {
+    private DateTime _lastSensorUpdate = DateTime.MinValue;
 #if ANDROID
     SensorManager _sensorManager;
     Sensor _stepCounter;
@@ -26,7 +27,7 @@ public partial class MainPage : ContentPage
     private bool _isListenerActive = false;
     private const int ACTIVITY_RECOGNITION_REQUEST_CODE = 1001;
     private bool _useStepDetector = false;
-    private DateTime _lastSensorUpdate = DateTime.MinValue;
+    
 #endif
 
     private int _stepCount = 0;
@@ -292,16 +293,20 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // ====== MÉTODO MEJORADO PARA REGISTRO DE SENSOR ======
     private void RegisterSensorListener()
     {
         try
         {
-            System.Diagnostics.Debug.WriteLine("=== INICIANDO REGISTRO DE SENSOR ===");
+            System.Diagnostics.Debug.WriteLine("=== INICIANDO REGISTRO DE SENSOR MEJORADO ===");
 
             if (_isListenerActive)
             {
                 System.Diagnostics.Debug.WriteLine("Listener ya está activo, desregistrando primero");
                 UnregisterSensorListener();
+                // REMOVIDO: await Task.Delay(1000); 
+                // CAMBIADO POR:
+                Task.Delay(1000).Wait(); // Esperar sincrónicamente
             }
 
             Sensor sensorToUse = _useStepDetector ? _stepDetector : _stepCounter;
@@ -312,24 +317,35 @@ public partial class MainPage : ContentPage
                 System.Diagnostics.Debug.WriteLine($"Tipo de sensor: {sensorToUse.Type}");
                 System.Diagnostics.Debug.WriteLine($"Usando StepDetector: {_useStepDetector}");
 
-                SensorDelay delay = SensorDelay.Normal;
-
+                // CAMBIO IMPORTANTE: Usar diferentes delays según el sensor
+                SensorDelay delay;
                 if (_useStepDetector)
                 {
-                    delay = SensorDelay.Ui;
+                    delay = SensorDelay.Fastest; // Más sensible para StepDetector
+                }
+                else
+                {
+                    delay = SensorDelay.Normal; // Normal para StepCounter
                 }
 
                 bool registered = _sensorManager.RegisterListener(_listener, sensorToUse, delay);
 
                 if (!registered)
                 {
-                    System.Diagnostics.Debug.WriteLine("Falló el registro, intentando con delay diferente");
-                    delay = _useStepDetector ? SensorDelay.Normal : SensorDelay.Ui;
+                    System.Diagnostics.Debug.WriteLine("Falló el registro, intentando con delay UI");
+                    delay = SensorDelay.Ui;
+                    registered = _sensorManager.RegisterListener(_listener, sensorToUse, delay);
+                }
+
+                if (!registered)
+                {
+                    System.Diagnostics.Debug.WriteLine("Falló el registro con UI, intentando con Game");
+                    delay = SensorDelay.Game;
                     registered = _sensorManager.RegisterListener(_listener, sensorToUse, delay);
                 }
 
                 _isListenerActive = registered;
-                System.Diagnostics.Debug.WriteLine($"*** RESULTADO REGISTRO: {registered} ***");
+                System.Diagnostics.Debug.WriteLine($"*** RESULTADO REGISTRO: {registered} con delay {delay} ***");
 
                 if (registered)
                 {
@@ -342,10 +358,17 @@ public partial class MainPage : ContentPage
                         var today = DateTime.Today;
                         Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
                     }
+
+                    // NUEVO: Forzar una lectura inicial (SIN AWAIT)
+                    Task.Run(async () =>
+                    {
+                        await Task.Delay(2000);
+                        System.Diagnostics.Debug.WriteLine("Esperando eventos del sensor...");
+                    });
                 }
                 else
                 {
-                    System.Diagnostics.Debug.WriteLine("*** FALLÓ EL REGISTRO DEL LISTENER ***");
+                    System.Diagnostics.Debug.WriteLine("*** FALLÓ EL REGISTRO DEL LISTENER COMPLETAMENTE ***");
                     TryAlternativeSensorRegistration();
                 }
             }
@@ -359,6 +382,7 @@ public partial class MainPage : ContentPage
             System.Diagnostics.Debug.WriteLine($"*** ERROR REGISTRANDO LISTENER: {ex.Message} ***");
         }
     }
+
 
     private void TryAlternativeSensorRegistration()
     {
@@ -436,6 +460,7 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // ====== MÉTODO MEJORADO PARA MANEJAR EVENTOS DE SENSORES ======
     private void OnSensorChanged(SensorEvent e)
     {
         try
@@ -454,21 +479,33 @@ public partial class MainPage : ContentPage
             {
                 System.Diagnostics.Debug.WriteLine($"Valor del sensor: {e.Values[0]}");
 
+                // CAMBIO IMPORTANTE: Procesar CUALQUIER evento de sensor
                 if (e.Sensor.Type == SensorType.StepCounter)
                 {
+                    System.Diagnostics.Debug.WriteLine(">>> Procesando como StepCounter");
                     ProcessStepCounterEvent(e);
                 }
                 else if (e.Sensor.Type == SensorType.StepDetector)
                 {
+                    System.Diagnostics.Debug.WriteLine(">>> Procesando como StepDetector");
                     ProcessStepDetectorEvent(e);
                 }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($">>> Sensor desconocido: {e.Sensor.Type}");
+                }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("*** WARNING: Evento sin valores ***");
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Error en OnSensorChanged: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"*** ERROR en OnSensorChanged: {ex.Message} ***");
         }
     }
+
 
     // ====== MÉTODO MEJORADO PARA PROCESAR EVENTOS DE STEP COUNTER ======
     private void ProcessStepCounterEvent(SensorEvent e)
@@ -1587,4 +1624,191 @@ public partial class MainPage : ContentPage
         }
     }
 
+    // Método para probar pasos reales - CORREGIDO
+    private async void OnTestRealStepsClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            await DisplayAlert("Test Pasos Reales",
+                "Camina 10-15 pasos de forma normal y luego presiona OK", "OK");
+
+            var initialSteps = _stepCount;
+            var initialTime = _lastSensorUpdate;
+
+            await DisplayAlert("Esperando...",
+                "Ahora camina 10-15 pasos y espera 5 segundos", "OK");
+
+            await Task.Delay(5000); // Esperar 5 segundos
+
+            var finalSteps = _stepCount;
+            var finalTime = _lastSensorUpdate;
+            var stepsDetected = finalSteps - initialSteps;
+            var timeDiff = finalTime - initialTime;
+
+            var result = new System.Text.StringBuilder();
+            result.AppendLine("=== RESULTADO DEL TEST ===\n");
+            result.AppendLine($"Pasos detectados: {stepsDetected}");
+            result.AppendLine($"Tiempo transcurrido: {timeDiff.TotalSeconds:F1}s");
+
+            if (stepsDetected > 0)
+            {
+                result.AppendLine("\n✅ ¡El sensor está funcionando!");
+            }
+            else if (timeDiff.TotalSeconds > 0)
+            {
+                result.AppendLine("\n⚠️ El sensor recibe eventos pero no detecta pasos");
+                result.AppendLine("Intenta caminar más rápido o fuerte");
+            }
+            else
+            {
+                result.AppendLine("\n❌ El sensor no está recibiendo eventos");
+                result.AppendLine("Necesita reiniciarse");
+            }
+
+            await DisplayAlert("Resultado Test", result.ToString(), "OK");
+#else
+            await DisplayAlert("Info", "Esta funcionalidad solo está disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnTestRealStepsClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en test de pasos reales", "OK");
+        }
+    }
+
+    // Método para reinicio completo - CORREGIDO
+    private async void OnFullSensorRestartClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            await DisplayAlert("Reiniciando", "Reiniciando sensor completamente...", "OK");
+
+            System.Diagnostics.Debug.WriteLine("*** REINICIO COMPLETO DEL SENSOR ***");
+
+            // Paso 1: Desregistrar completamente
+            UnregisterSensorListener();
+            await Task.Delay(2000);
+
+            // Paso 2: Limpiar referencias
+            _listener = null;
+            _isListenerActive = false;
+            await Task.Delay(1000);
+
+            // Paso 3: Recrear listener
+            _listener = new SensorListener();
+            _listener.SensorChanged += OnSensorChanged;
+            await Task.Delay(1000);
+
+            // Paso 4: Intentar con sensor alternativo primero
+            if (!_useStepDetector && _stepDetector != null)
+            {
+                System.Diagnostics.Debug.WriteLine("Intentando primero con StepDetector");
+                _useStepDetector = true;
+            }
+            else if (_useStepDetector && _stepCounter != null)
+            {
+                System.Diagnostics.Debug.WriteLine("Intentando primero con StepCounter");
+                _useStepDetector = false;
+            }
+
+            // Paso 5: Registrar de nuevo
+            RegisterSensorListener();
+
+            await Task.Delay(1000);
+
+            var status = _isListenerActive ? "✅ Exitoso" : "❌ Falló";
+            await DisplayAlert("Reinicio Completado",
+                $"Estado: {status}\n" +
+                $"Sensor: {(_useStepDetector ? "StepDetector" : "StepCounter")}", "OK");
+#else
+            await DisplayAlert("Info", "Esta funcionalidad solo está disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnFullSensorRestartClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en reinicio completo", "OK");
+        }
+    }
+
+
+    // Método para cambiar sensor - CORREGIDO
+    private async void OnSwitchSensorTypeClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            var currentType = _useStepDetector ? "StepDetector" : "StepCounter";
+            var newType = _useStepDetector ? "StepCounter" : "StepDetector";
+
+            var result = await DisplayAlert("Cambiar Sensor",
+                $"Actual: {currentType}\n¿Cambiar a {newType}?", "Sí", "No");
+
+            if (result)
+            {
+                UnregisterSensorListener();
+                await Task.Delay(1000);
+
+                _useStepDetector = !_useStepDetector;
+
+                if (_useStepDetector && _stepDetector == null)
+                {
+                    await DisplayAlert("Error", "StepDetector no disponible", "OK");
+                    _useStepDetector = false;
+                    return;
+                }
+
+                if (!_useStepDetector && _stepCounter == null)
+                {
+                    await DisplayAlert("Error", "StepCounter no disponible", "OK");
+                    _useStepDetector = true;
+                    return;
+                }
+
+                RegisterSensorListener();
+
+                await DisplayAlert("Cambiado",
+                    $"Ahora usando: {(_useStepDetector ? "StepDetector" : "StepCounter")}", "OK");
+            }
+#else
+            await DisplayAlert("Info", "Esta funcionalidad solo está disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnSwitchSensorTypeClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error cambiando sensor", "OK");
+        }
+    }
+
+    // Método simple para probar actualización - SIN ANDROID
+    private async void OnSimpleTestClicked(object sender, EventArgs e)
+    {
+        try
+        {
+            var oldSteps = _stepCount;
+            _stepCount += 5;
+
+            var today = DateTime.Today;
+            Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
+
+            if (StepCounterLabel != null)
+            {
+                StepCounterLabel.Text = $"Pasos dados: {FormatStepCount(_stepCount)}";
+            }
+            UpdateStepsRemaining();
+
+            await DisplayAlert("Test Simple",
+                $"Pasos: {oldSteps} → {_stepCount}\n" +
+                $"Última actualización: {_lastSensorUpdate:HH:mm:ss}", "OK");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnSimpleTestClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en test simple", "OK");
+        }
+    }
 }

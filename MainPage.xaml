@@ -61,6 +61,10 @@
             <Button Text="Simular Pasos" Clicked="OnSimulateStepsClicked" />
             <Button Text="Probar Sensor" Clicked="OnTestSensorClicked" />
             <Button Text="Resetear Pasos" Clicked="OnResetStepsClicked" />
+
+            <Button Text="Test Pasos Reales" Clicked="OnTestRealStepsClicked" />
+            <Button Text="Reinicio Completo" Clicked="OnFullSensorRestartClicked" />
+            <Button Text="Cambiar Sensor" Clicked="OnSwitchSensorTypeClicked" />
         </VerticalStackLayout>
     </ScrollView>
 
