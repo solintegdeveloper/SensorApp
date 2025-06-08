@@ -53,18 +53,17 @@
             Text="Verificar Estado" 
             Clicked="OnCheckSensorStatusClicked" />
 
-            <!--<Button Text="Forzar Refresh" Clicked="OnForceRefreshClicked" />-->
-            <!--<Button Text="Verificar Labels" Clicked="OnVerifyLabelsClicked" />-->
-            <!--<Button Text="Test UI Update" Clicked="OnTestUIUpdateClicked" />-->
-            <!--<Button Text="Monitor Sensor" Clicked="OnMonitorSensorClicked" />-->
-
-            <Button Text="Simular Pasos" Clicked="OnSimulateStepsClicked" />
+            <!--<Button Text="Simular Pasos" Clicked="OnSimulateStepsClicked" />-->
             <Button Text="Probar Sensor" Clicked="OnTestSensorClicked" />
             <Button Text="Resetear Pasos" Clicked="OnResetStepsClicked" />
 
-            <Button Text="Test Pasos Reales" Clicked="OnTestRealStepsClicked" />
-            <Button Text="Reinicio Completo" Clicked="OnFullSensorRestartClicked" />
-            <Button Text="Cambiar Sensor" Clicked="OnSwitchSensorTypeClicked" />
+            <!--<Button Text="Test Pasos Reales" Clicked="OnTestRealStepsClicked" />-->
+            <!--<Button Text="Reinicio Completo" Clicked="OnFullSensorRestartClicked" />-->
+            <!--<Button Text="Cambiar Sensor" Clicked="OnSwitchSensorTypeClicked" />-->
+
+            <!--<Button Text="Calibrar Sensor" Clicked="OnCalibrateSensorClicked" />-->
+            <!--<Button Text="Monitor Precisión" Clicked="OnMonitorAccuracyClicked" />-->
+            <!--<Button Text="Ajustar Sensibilidad" Clicked="OnAdjustSensitivityClicked" />-->
         </VerticalStackLayout>
     </ScrollView>
 

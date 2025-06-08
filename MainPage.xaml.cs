@@ -19,6 +19,8 @@ namespace SensorApp;
 public partial class MainPage : ContentPage
 {
     private DateTime _lastSensorUpdate = DateTime.MinValue;
+    private DateTime _lastStepTime = DateTime.MinValue;
+
 #if ANDROID
     SensorManager _sensorManager;
     Sensor _stepCounter;
@@ -524,37 +526,37 @@ public partial class MainPage : ContentPage
                 _initialStepCount = sensorValue;
                 Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
                 System.Diagnostics.Debug.WriteLine($"Valor inicial establecido: {_initialStepCount}");
+                return;
             }
 
-            int currentDaySteps = sensorValue - _initialStepCount;
-            System.Diagnostics.Debug.WriteLine($"Pasos calculados: {sensorValue} - {_initialStepCount} = {currentDaySteps}");
+            int rawDaySteps = sensorValue - _initialStepCount;
+            System.Diagnostics.Debug.WriteLine($"Pasos brutos: {sensorValue} - {_initialStepCount} = {rawDaySteps}");
 
-            if (currentDaySteps < 0)
+            // Manejar reset del sensor
+            if (rawDaySteps < 0)
             {
-                System.Diagnostics.Debug.WriteLine("Detectado reset del sensor, ajustando...");
-                _initialStepCount = sensorValue;
-                currentDaySteps = _stepCount;
+                System.Diagnostics.Debug.WriteLine("Reset del sensor detectado, reajustando...");
+                _initialStepCount = sensorValue - _stepCount;
+                rawDaySteps = _stepCount;
                 Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
             }
 
-            currentDaySteps = ValidateStepCount(currentDaySteps);
+            // VALIDACIÓN MÁS PERMISIVA PARA STEP COUNTER
+            int validatedSteps = ValidateStepCountForStepCounter(rawDaySteps);
 
-            // CAMBIO IMPORTANTE: Actualizar SIEMPRE si hay diferencia, aunque sea pequeña
-            if (currentDaySteps != _stepCount)
+            // Actualizar CUALQUIER cambio positivo (incluso +1)
+            if (validatedSteps > _stepCount)
             {
                 int previousSteps = _stepCount;
-                _stepCount = Math.Max(currentDaySteps, _stepCount);
+                _stepCount = validatedSteps;
                 Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
 
-                System.Diagnostics.Debug.WriteLine($"*** CAMBIO DETECTADO: {previousSteps} → {_stepCount} ***");
-                System.Diagnostics.Debug.WriteLine($"*** FORZANDO ACTUALIZACIÓN DE UI ***");
-
-                // Forzar actualización inmediata del UI
+                System.Diagnostics.Debug.WriteLine($"*** PASOS ACTUALIZADOS: {previousSteps} → {_stepCount} ***");
                 UpdateUI();
             }
-            else
+            else if (validatedSteps != _stepCount)
             {
-                System.Diagnostics.Debug.WriteLine($"Sin cambios en pasos: {_stepCount}");
+                System.Diagnostics.Debug.WriteLine($"Cambio ignorado: {_stepCount} → {validatedSteps}");
             }
         }
         catch (Exception ex)
@@ -562,6 +564,56 @@ public partial class MainPage : ContentPage
             System.Diagnostics.Debug.WriteLine($"Error procesando StepCounter: {ex.Message}");
         }
     }
+
+    // ====== NUEVA FUNCIÓN DE VALIDACIÓN ESPECÍFICA PARA STEP COUNTER ======
+    private int ValidateStepCountForStepCounter(int newCount)
+    {
+        try
+        {
+            System.Diagnostics.Debug.WriteLine($"=== VALIDANDO STEP COUNTER ===");
+            System.Diagnostics.Debug.WriteLine($"Anterior: {_stepCount}, Nuevo: {newCount}, Diferencia: {newCount - _stepCount}");
+
+            // Para StepCounter, ser mucho más permisivo
+            var increment = newCount - _stepCount;
+
+            // Solo rechazar si hay un reset obvio
+            if (newCount < _stepCount && _stepCount > 20)
+            {
+                System.Diagnostics.Debug.WriteLine($"Reset detectado, manteniendo: {_stepCount}");
+                return _stepCount;
+            }
+
+            // Permitir incrementos más grandes para StepCounter
+            if (increment > 50) // Muy generoso
+            {
+                System.Diagnostics.Debug.WriteLine($"Incremento muy grande: {increment}, limitando a 10");
+                return _stepCount + 10;
+            }
+
+            // Aceptar cualquier incremento positivo
+            if (increment >= 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"Incremento aceptado: {increment}");
+                return newCount;
+            }
+
+            // Para decrementos pequeños, mantener el valor actual
+            if (increment > -5)
+            {
+                System.Diagnostics.Debug.WriteLine($"Decremento pequeño ignorado: {increment}");
+                return _stepCount;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"Usando nuevo valor: {newCount}");
+            return newCount;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error validando StepCounter: {ex.Message}");
+            return _stepCount;
+        }
+    }
+
 
     // Método para verificar estado de los Labels
     private async void OnVerifyLabelsClicked(object sender, EventArgs e)
@@ -698,7 +750,20 @@ public partial class MainPage : ContentPage
         try
         {
             System.Diagnostics.Debug.WriteLine($"=== PROCESANDO STEP DETECTOR ===");
-            System.Diagnostics.Debug.WriteLine($"Paso detectado - incrementando contador");
+
+            // Filtro de tiempo para evitar eventos duplicados
+            var now = DateTime.Now;
+            var timeSinceLastStep = now - _lastStepTime;
+
+            // Ignorar eventos muy frecuentes (menos de 200ms entre pasos)
+            if (timeSinceLastStep.TotalMilliseconds < 200)
+            {
+                System.Diagnostics.Debug.WriteLine($"Evento ignorado - muy frecuente: {timeSinceLastStep.TotalMilliseconds}ms");
+                return;
+            }
+
+            _lastStepTime = now;
+            System.Diagnostics.Debug.WriteLine($"Paso detectado - tiempo desde último: {timeSinceLastStep.TotalMilliseconds}ms");
 
             var today = DateTime.Today;
             int previousSteps = _stepCount;
@@ -706,9 +771,6 @@ public partial class MainPage : ContentPage
             Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
 
             System.Diagnostics.Debug.WriteLine($"*** PASO DETECTADO: {previousSteps} → {_stepCount} ***");
-            System.Diagnostics.Debug.WriteLine($"*** FORZANDO ACTUALIZACIÓN DE UI ***");
-
-            // Forzar actualización inmediata del UI
             UpdateUI();
         }
         catch (Exception ex)
@@ -716,6 +778,7 @@ public partial class MainPage : ContentPage
             System.Diagnostics.Debug.WriteLine($"Error procesando StepDetector: {ex.Message}");
         }
     }
+
 
     // ====== MÉTODO ACTUALIZADO PARA UpdateUI (SIN ERRORES) ======
     private void UpdateUI()
@@ -827,30 +890,41 @@ public partial class MainPage : ContentPage
     {
         try
         {
+            System.Diagnostics.Debug.WriteLine($"=== VALIDANDO CONTEO ===");
+            System.Diagnostics.Debug.WriteLine($"Anterior: {_stepCount}, Nuevo: {newCount}, Diferencia: {newCount - _stepCount}");
+
             // Si el nuevo conteo es menor que el actual, podría ser un reset del sensor
-            if (newCount < _stepCount && _stepCount > 100)
+            if (newCount < _stepCount && _stepCount > 50) // Reducido de 100 a 50
             {
-                System.Diagnostics.Debug.WriteLine($"Posible reset del sensor detectado. Anterior: {_stepCount}, Nuevo: {newCount}");
-                // Mantener el conteo anterior
+                System.Diagnostics.Debug.WriteLine($"Reset del sensor detectado. Manteniendo: {_stepCount}");
                 return _stepCount;
             }
 
-            // Si el incremento es muy grande (más de 100 pasos de una vez), podría ser un error
-            if (newCount - _stepCount > 100)
+            // Si el incremento es muy grande, limitarlo
+            var increment = newCount - _stepCount;
+            if (increment > 20) // Reducido de 100 a 20 para ser más permisivo
             {
-                System.Diagnostics.Debug.WriteLine($"Incremento muy grande detectado: {newCount - _stepCount}");
-                // Incrementar gradualmente
-                return _stepCount + 1;
+                System.Diagnostics.Debug.WriteLine($"Incremento muy grande: {increment}, limitando a 5");
+                return _stepCount + 5; // Incrementar gradualmente
             }
 
+            // Si el incremento es negativo pero pequeño, ignorar
+            if (increment < 0 && Math.Abs(increment) < 10)
+            {
+                System.Diagnostics.Debug.WriteLine($"Fluctuación menor ignorada: {increment}");
+                return _stepCount; // Mantener el valor actual
+            }
+
+            System.Diagnostics.Debug.WriteLine($"Conteo válido: {newCount}");
             return newCount;
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Error validando conteo de pasos: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"Error validando conteo: {ex.Message}");
             return _stepCount;
         }
     }
+
 #endif
 
     private async Task CheckAndAskAgeAsync()
@@ -1011,7 +1085,7 @@ public partial class MainPage : ContentPage
             int goal = Preferences.Get("daily_steps_goal_value", 8000);
             int remaining = Math.Max(0, goal - _stepCount);
 
-            StepsRemainingLabel.Text = $"Pasos restantes: {FormatStepCount(remaining)}";
+            StepsRemainingLabel.Text = $"Pasos restantes: {remaining:N0}";
 
             if (remaining == 0)
             {
@@ -1809,6 +1883,255 @@ public partial class MainPage : ContentPage
         {
             System.Diagnostics.Debug.WriteLine($"Error en OnSimpleTestClicked: {ex.Message}");
             await DisplayAlert("Error", "Error en test simple", "OK");
+        }
+    }
+
+    // ====== MÉTODO PARA CALIBRAR EL SENSOR ======
+    private async void OnCalibrateSensorClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            var result = await DisplayAlert("Calibrar Sensor",
+                "¿Quieres recalibrar el sensor?\n" +
+                "Esto restablecerá el punto de referencia para hoy.", "Sí", "No");
+
+            if (result)
+            {
+                var today = DateTime.Today;
+
+                // Opción 1: Reset completo
+                var option = await DisplayAlert("Tipo de Calibración",
+                    "¿Cómo quieres calibrar?", "Reset Completo", "Ajuste Fino");
+
+                if (option) // Reset completo
+                {
+                    _stepCount = 0;
+                    _initialStepCount = -1;
+                    Preferences.Remove($"steps_{today:yyyy-MM-dd}");
+                    Preferences.Remove($"initial_steps_{today:yyyy-MM-dd}");
+
+                    await DisplayAlert("Reset Completo",
+                        "Contador reiniciado a 0.\nEmpezará a contar desde ahora.", "OK");
+                }
+                else // Ajuste fino
+                {
+                    string input = await DisplayPromptAsync("Ajuste Fino",
+                        $"Pasos actuales: {_stepCount}\n¿Cuántos pasos has dado realmente?");
+
+                    if (int.TryParse(input, out int realSteps) && realSteps >= 0)
+                    {
+                        int adjustment = realSteps - _stepCount;
+                        _stepCount = realSteps;
+                        Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
+
+                        await DisplayAlert("Ajuste Aplicado",
+                            $"Pasos ajustados: {adjustment:+#;-#;0}\n" +
+                            $"Nuevo total: {_stepCount}", "OK");
+                    }
+                }
+
+                UpdateUI();
+            }
+#else
+        await DisplayAlert("Info", "Solo disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnCalibrateSensorClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en calibración", "OK");
+        }
+    }
+
+    // ====== MÉTODO PARA MONITOREAR PRECISIÓN ======
+    private async void OnMonitorAccuracyClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            await DisplayAlert("Monitor de Precisión",
+                "Vamos a monitorear la precisión del sensor.\n" +
+                "Camina exactamente 20 pasos contándolos manualmente.", "Empezar");
+
+            var initialSteps = _stepCount;
+            var startTime = DateTime.Now;
+
+            await DisplayAlert("¡Ahora!",
+                "Camina exactamente 20 pasos.\n" +
+                "Cuenta en voz alta: 1, 2, 3...\n" +
+                "Camina de forma normal y constante.", "Terminé");
+
+            var finalSteps = _stepCount;
+            var endTime = DateTime.Now;
+            var detectedSteps = finalSteps - initialSteps;
+            var duration = endTime - startTime;
+
+            // CÁLCULO CORREGIDO DE PRECISIÓN
+            var accuracy = detectedSteps > 0 ? ((double)detectedSteps / 20.0) * 100 : 0;
+            var error = Math.Abs(detectedSteps - 20);
+            var errorPercentage = (error / 20.0) * 100;
+
+            var report = new System.Text.StringBuilder();
+            report.AppendLine("=== REPORTE DE PRECISIÓN ===\n");
+            report.AppendLine($"Pasos reales: 20");
+            report.AppendLine($"Pasos detectados: {detectedSteps}");
+            report.AppendLine($"Precisión: {accuracy:F1}%");
+            report.AppendLine($"Error: {error} pasos ({errorPercentage:F1}%)");
+            report.AppendLine($"Tiempo: {duration.TotalSeconds:F1}s");
+
+            // EVALUACIÓN CORREGIDA
+            if (detectedSteps == 20)
+            {
+                report.AppendLine("\n🎯 Precisión perfecta!");
+            }
+            else if (accuracy >= 85 && accuracy <= 115) // 17-23 pasos detectados
+            {
+                report.AppendLine("\n✅ Buena precisión");
+            }
+            else if (accuracy >= 70 && accuracy <= 130) // 14-26 pasos detectados
+            {
+                report.AppendLine("\n⚠️ Precisión aceptable");
+                if (detectedSteps < 20)
+                {
+                    report.AppendLine("El sensor subcuenta pasos");
+                    report.AppendLine("Intenta: caminar más fuerte, más regular, o cambiar sensibilidad");
+                }
+                else
+                {
+                    report.AppendLine("El sensor sobrecuenta pasos");
+                    report.AppendLine("Intenta: caminar más suave o cambiar sensibilidad");
+                }
+            }
+            else
+            {
+                report.AppendLine("\n❌ Baja precisión");
+                if (detectedSteps < 10)
+                {
+                    report.AppendLine("El sensor está muy poco sensible");
+                    report.AppendLine("Recomendación: Cambiar a StepDetector");
+                }
+                else
+                {
+                    report.AppendLine("El sensor está muy sensible");
+                    report.AppendLine("Recomendación: Ajustar filtros o cambiar sensor");
+                }
+            }
+
+            await DisplayAlert("Reporte de Precisión", report.ToString(), "OK");
+#else
+        await DisplayAlert("Info", "Solo disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnMonitorAccuracyClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error en monitor de precisión", "OK");
+        }
+    }
+
+    // ====== MÉTODO PARA MEJORAR SENSIBILIDAD ======
+    private async void OnAdjustSensitivityClicked(object sender, EventArgs e)
+    {
+        try
+        {
+#if ANDROID
+            var options = await DisplayActionSheet("Ajustar Sensibilidad",
+                "Cancelar", null,
+                "Más Sensible (detecta más pasos)",
+                "Menos Sensible (detecta menos pasos)",
+                "Reiniciar Sensor con Mayor Sensibilidad");
+
+            switch (options)
+            {
+                case "Más Sensible (detecta más pasos)":
+                    // Cambiar a StepDetector que es más sensible
+                    if (_stepDetector != null)
+                    {
+                        UnregisterSensorListener();
+                        await Task.Delay(1000);
+                        _useStepDetector = true;
+                        RegisterSensorListener();
+                        await DisplayAlert("Sensibilidad", "Cambiado a StepDetector (más sensible)", "OK");
+                    }
+                    else
+                    {
+                        await DisplayAlert("Error", "StepDetector no disponible", "OK");
+                    }
+                    break;
+
+                case "Menos Sensible (detecta menos pasos)":
+                    // Mantener StepCounter pero con filtros más estrictos
+                    if (_stepCounter != null)
+                    {
+                        UnregisterSensorListener();
+                        await Task.Delay(1000);
+                        _useStepDetector = false;
+                        RegisterSensorListener();
+                        await DisplayAlert("Sensibilidad", "Mantenido en StepCounter (menos sensible)", "OK");
+                    }
+                    break;
+
+                case "Reiniciar Sensor con Mayor Sensibilidad":
+                    // Reiniciar con delay más rápido
+                    await RestartSensorWithHighSensitivity();
+                    break;
+            }
+#else
+        await DisplayAlert("Info", "Solo disponible en Android", "OK");
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnAdjustSensitivityClicked: {ex.Message}");
+            await DisplayAlert("Error", "Error ajustando sensibilidad", "OK");
+        }
+    }
+
+    // ====== MÉTODO PARA REINICIAR CON ALTA SENSIBILIDAD ======
+    private async Task RestartSensorWithHighSensitivity()
+    {
+        try
+        {
+#if ANDROID
+            System.Diagnostics.Debug.WriteLine("*** REINICIANDO CON ALTA SENSIBILIDAD ***");
+
+            UnregisterSensorListener();
+            await Task.Delay(2000);
+
+            // Recrear listener
+            _listener = new SensorListener();
+            _listener.SensorChanged += OnSensorChanged;
+
+            // Usar el sensor más sensible disponible
+            Sensor sensorToUse = _stepDetector ?? _stepCounter;
+            _useStepDetector = _stepDetector != null;
+
+            if (sensorToUse != null && _listener != null)
+            {
+                // Usar el delay más rápido posible
+                SensorDelay delay = SensorDelay.Fastest;
+                bool registered = _sensorManager.RegisterListener(_listener, sensorToUse, delay);
+
+                if (!registered)
+                {
+                    delay = SensorDelay.Game;
+                    registered = _sensorManager.RegisterListener(_listener, sensorToUse, delay);
+                }
+
+                _isListenerActive = registered;
+
+                var sensorName = _useStepDetector ? "StepDetector" : "StepCounter";
+                await DisplayAlert("Reinicio Completo",
+                    $"Sensor: {sensorName}\n" +
+                    $"Delay: {delay}\n" +
+                    $"Estado: {(registered ? "✅ Activo" : "❌ Error")}", "OK");
+            }
+#endif
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en RestartSensorWithHighSensitivity: {ex.Message}");
         }
     }
 }
