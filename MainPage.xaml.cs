@@ -1,12 +1,15 @@
 ﻿using Microsoft.Maui.Controls;
-using Microsoft.Maui.Storage;
 using System;
 using System.Threading.Tasks;
+using Microsoft.Maui.Storage;
 
 #if ANDROID
+using Android;
+using AndroidX.Core.Content;
+using Android.Content.PM;
 using Android.Hardware;
 using Android.Content;
-using SensorApp.Platforms.Android;
+using AndroidX.Core.App;
 #endif
 
 namespace SensorApp;
@@ -15,61 +18,255 @@ public partial class MainPage : ContentPage
 {
 #if ANDROID
     SensorManager _sensorManager;
-    Sensor _accelerometer;
-    Sensor _gyroscope;
-    Sensor _light;
     Sensor _stepCounter;
-    Sensor _stepDetector;
     SensorListener _listener;
+    private bool _isListenerActive = false;
+    private const int ACTIVITY_RECOGNITION_REQUEST_CODE = 1001;
 #endif
 
-    private SensorDatabase _sensorDatabase = new SensorDatabase();
-
     private int _stepCount = 0;
-    private int _initialStepCount = 0;
-    private bool _isFirstStepReading = true;
-
-    // Variables respaldo con acelerómetro
-    private float _lastAccelerationBackup = 9.8f;
-    private long _lastStepTimeBackup = 0;
+    private int _initialStepCount = -1;
 
     public MainPage()
     {
         InitializeComponent();
-
-        _ = CheckAndAskAgeAsync();  // Llamada asíncrona sin esperar
+        CheckAndAskAgeAsync();
 
 #if ANDROID
-        _sensorManager = (SensorManager)Android.App.Application.Context.GetSystemService(Context.SensorService);
-        _accelerometer = _sensorManager.GetDefaultSensor(SensorType.Accelerometer);
-        _gyroscope = _sensorManager.GetDefaultSensor(SensorType.Gyroscope);
-        _light = _sensorManager.GetDefaultSensor(SensorType.Light);
-        _stepCounter = _sensorManager.GetDefaultSensor(SensorType.StepCounter);
-        _stepDetector = _sensorManager.GetDefaultSensor(SensorType.StepDetector);
-
-        _listener = new SensorListener();
-        _listener.OnSensorValueChanged += OnSensorChanged;
-
-        CheckStepSensorAvailability();
+        InitializeAndroidSensors();
 #endif
     }
 
 #if ANDROID
-    private void CheckStepSensorAvailability()
+    private void InitializeAndroidSensors()
     {
-        if (_stepCounter == null && _stepDetector == null)
+        try
         {
-            Device.BeginInvokeOnMainThread(async () =>
+            // Obtener SensorManager
+            var context = Platform.CurrentActivity?.BaseContext ?? Android.App.Application.Context;
+            _sensorManager = (SensorManager)context.GetSystemService(Context.SensorService);
+
+            if (_sensorManager == null)
             {
-                await DisplayAlert("Advertencia",
-                    "Tu dispositivo no tiene sensores de pasos disponibles. Se usará el acelerómetro como respaldo, pero puede ser menos preciso.",
-                    "OK");
-            });
+                System.Diagnostics.Debug.WriteLine("No se pudo obtener SensorManager");
+                return;
+            }
+
+            // Obtener sensor de pasos
+            _stepCounter = _sensorManager.GetDefaultSensor(SensorType.StepCounter);
+
+            if (_stepCounter == null)
+            {
+                System.Diagnostics.Debug.WriteLine("Sensor de pasos no disponible en este dispositivo");
+                return;
+            }
+
+            // Crear listener
+            _listener = new SensorListener();
+            _listener.SensorChanged += OnSensorChanged;
+
+            System.Diagnostics.Debug.WriteLine($"Sensor inicializado: {_stepCounter.Name}");
+            System.Diagnostics.Debug.WriteLine($"Vendor: {_stepCounter.Vendor}");
+
+            // Inicializar el sensor
+            InitializeSensor();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error inicializando sensores Android: {ex.Message}");
+        }
+    }
+
+    private async void InitializeSensor()
+    {
+        if (await CheckAndRequestActivityRecognitionPermission())
+        {
+            RegisterSensorListener();
+        }
+        else
+        {
+            System.Diagnostics.Debug.WriteLine("Permiso denegado para sensores");
+        }
+    }
+
+    private async Task<bool> CheckAndRequestActivityRecognitionPermission()
+    {
+        try
+        {
+            var context = Platform.CurrentActivity ?? Android.App.Application.Context;
+
+            // Para Android 10 (API 29) y superior, necesitamos ACTIVITY_RECOGNITION
+            if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.Q)
+            {
+                // Verificar si ya tenemos el permiso
+                if (ContextCompat.CheckSelfPermission(context, Android.Manifest.Permission.ActivityRecognition)
+                    == Permission.Granted)
+                {
+                    System.Diagnostics.Debug.WriteLine("Permiso ACTIVITY_RECOGNITION ya concedido");
+                    return true;
+                }
+
+                // Solicitar el permiso
+                if (Platform.CurrentActivity is AndroidX.AppCompat.App.AppCompatActivity activity)
+                {
+                    ActivityCompat.RequestPermissions(activity,
+                        new string[] { Android.Manifest.Permission.ActivityRecognition },
+                        ACTIVITY_RECOGNITION_REQUEST_CODE);
+
+                    // Esperar un momento para que se procese
+                    await Task.Delay(2000);
+
+                    // Verificar nuevamente
+                    var finalStatus = ContextCompat.CheckSelfPermission(context, Android.Manifest.Permission.ActivityRecognition);
+                    bool granted = finalStatus == Permission.Granted;
+
+                    System.Diagnostics.Debug.WriteLine($"Permiso ACTIVITY_RECOGNITION después de solicitud: {granted}");
+                    return granted;
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("No se pudo obtener la Activity para solicitar permisos");
+                    return false;
+                }
+            }
+            else
+            {
+                // Para versiones anteriores a Android 10, no se necesita permiso específico
+                System.Diagnostics.Debug.WriteLine("Android < 10, no se requiere ACTIVITY_RECOGNITION");
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error verificando permisos: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"StackTrace: {ex.StackTrace}");
+            return false;
+        }
+    }
+
+    // Método alternativo usando solo verificación nativa
+    private bool CheckActivityRecognitionPermissionNative()
+    {
+        try
+        {
+            var context = Platform.CurrentActivity ?? Android.App.Application.Context;
+
+            if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.Q)
+            {
+                var permission = ContextCompat.CheckSelfPermission(context, Android.Manifest.Permission.ActivityRecognition);
+                bool granted = permission == Permission.Granted;
+                System.Diagnostics.Debug.WriteLine($"Permiso nativo ACTIVITY_RECOGNITION: {granted}");
+                return granted;
+            }
+
+            return true; // Para versiones anteriores
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error verificando permiso nativo: {ex.Message}");
+            return false;
+        }
+    }
+
+    private void RegisterSensorListener()
+    {
+        try
+        {
+            // Verificación adicional de permiso usando método nativo
+            if (!CheckActivityRecognitionPermissionNative())
+            {
+                System.Diagnostics.Debug.WriteLine("Sin permiso ACTIVITY_RECOGNITION a nivel sistema");
+                return;
+            }
+
+            if (_stepCounter != null && _listener != null && !_isListenerActive)
+            {
+                System.Diagnostics.Debug.WriteLine($"Registrando sensor: {_stepCounter.Name}");
+                System.Diagnostics.Debug.WriteLine($"Vendor: {_stepCounter.Vendor}");
+                System.Diagnostics.Debug.WriteLine($"Tipo: {_stepCounter.Type}");
+
+                bool registered = _sensorManager.RegisterListener(_listener, _stepCounter, SensorDelay.Normal);
+                _isListenerActive = registered;
+
+                System.Diagnostics.Debug.WriteLine($"Listener registrado: {registered}");
+
+                if (!registered)
+                {
+                    System.Diagnostics.Debug.WriteLine("Falló el registro del listener del sensor");
+
+                    // Diagnóstico adicional
+                    var availableSensors = _sensorManager.GetSensorList(SensorType.StepCounter);
+                    System.Diagnostics.Debug.WriteLine($"Sensores de pasos disponibles: {availableSensors.Count}");
+
+                    foreach (var sensor in availableSensors)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"- Sensor: {sensor.Name}, Vendor: {sensor.Vendor}");
+                    }
+                }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine($"Condiciones no cumplidas:");
+                System.Diagnostics.Debug.WriteLine($"- _stepCounter null: {_stepCounter == null}");
+                System.Diagnostics.Debug.WriteLine($"- _listener null: {_listener == null}");
+                System.Diagnostics.Debug.WriteLine($"- _isListenerActive: {_isListenerActive}");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error registrando listener: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"StackTrace: {ex.StackTrace}");
+        }
+    }
+
+    // Clase para el listener del sensor
+    private class SensorListener : Java.Lang.Object, ISensorEventListener
+    {
+        public event Action<SensorEvent> SensorChanged;
+
+        public void OnAccuracyChanged(Sensor sensor, SensorStatus accuracy)
+        {
+            // No necesario para nuestro caso
+        }
+
+        public void OnSensorChanged(SensorEvent e)
+        {
+            SensorChanged?.Invoke(e);
         }
     }
 #endif
 
-    private async Task CheckAndAskAgeAsync()
+    private async Task ListAvailableSensors()
+    {
+#if ANDROID
+        try
+        {
+            if (_sensorManager != null)
+            {
+                var allSensors = _sensorManager.GetSensorList(SensorType.All);
+                System.Diagnostics.Debug.WriteLine($"Total de sensores disponibles: {allSensors.Count}");
+
+                var sensorInfo = new System.Text.StringBuilder();
+                sensorInfo.AppendLine($"Sensores disponibles ({allSensors.Count}):");
+
+                foreach (var sensor in allSensors)
+                {
+                    sensorInfo.AppendLine($"- {sensor.Name} (Tipo: {sensor.Type})");
+                    System.Diagnostics.Debug.WriteLine($"Sensor: {sensor.Name} - Tipo: {sensor.Type} - Vendor: {sensor.Vendor}");
+                }
+
+                // Mostrar información de sensores en un alert (opcional, puedes comentar esta línea)
+                await DisplayAlert("Sensores Disponibles", sensorInfo.ToString(), "OK");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error listando sensores: {ex.Message}");
+        }
+#endif
+    }
+
+    private async void CheckAndAskAgeAsync()
     {
         if (!Preferences.ContainsKey("user_age"))
         {
@@ -78,7 +275,6 @@ public partial class MainPage : ContentPage
             if (int.TryParse(ageInput, out int age))
             {
                 Preferences.Set("user_age", age);
-
                 int goal = 0;
                 string meta = "";
 
@@ -110,7 +306,7 @@ public partial class MainPage : ContentPage
             {
                 await DisplayAlert("Error", "Edad no válida. Intenta nuevamente.", "OK");
                 await Task.Delay(500);
-                await CheckAndAskAgeAsync();
+                CheckAndAskAgeAsync();
             }
         }
         else
@@ -119,174 +315,97 @@ public partial class MainPage : ContentPage
             StepsGoalLabel.Text = $"Meta diaria: {savedGoalText}";
         }
 
-        await LoadTodaySteps();
+        LoadSavedSteps();
     }
 
-    private async Task LoadTodaySteps()
+    private void LoadSavedSteps()
     {
         var today = DateTime.Today;
-        var savedSteps = Preferences.Get($"steps_{today:yyyy-MM-dd}", 0);
-        var savedInitialCount = Preferences.Get($"initial_steps_{today:yyyy-MM-dd}", -1);
+        _stepCount = Preferences.Get($"steps_{today:yyyy-MM-dd}", 0);
+        _initialStepCount = Preferences.Get($"initial_steps_{today:yyyy-MM-dd}", -1);
 
-        if (savedInitialCount != -1)
-        {
-            _initialStepCount = savedInitialCount;
-            _stepCount = savedSteps;
-            _isFirstStepReading = false;
+        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+        UpdateStepsRemaining();
 
-            Device.BeginInvokeOnMainThread(() =>
-            {
-                StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
-                UpdateStepsRemaining();
-            });
-        }
+        System.Diagnostics.Debug.WriteLine($"Pasos cargados: {_stepCount}, Inicial: {_initialStepCount}");
     }
 
+#if ANDROID
     protected override void OnAppearing()
     {
         base.OnAppearing();
-
-#if ANDROID
-        if (_stepCounter != null)
-            _sensorManager.RegisterListener(_listener, _stepCounter, SensorDelay.Ui);
-
-        if (_stepDetector != null)
-            _sensorManager.RegisterListener(_listener, _stepDetector, SensorDelay.Ui);
-
-        if (_accelerometer != null)
-            _sensorManager.RegisterListener(_listener, _accelerometer, SensorDelay.Game);
-        if (_gyroscope != null)
-            _sensorManager.RegisterListener(_listener, _gyroscope, SensorDelay.Ui);
-        if (_light != null)
-            _sensorManager.RegisterListener(_listener, _light, SensorDelay.Ui);
-#endif
+        if (_stepCounter != null && _listener != null && !_isListenerActive)
+        {
+            RegisterSensorListener();
+        }
     }
 
     protected override void OnDisappearing()
     {
         base.OnDisappearing();
-
-#if ANDROID
-        _sensorManager.UnregisterListener(_listener);
-#endif
+        UnregisterSensorListener();
     }
 
-#if ANDROID
-    private async void OnSensorChanged(SensorEvent e)
+    private void UnregisterSensorListener()
     {
-        var data = new SensorData
+        try
         {
-            SensorType = e.Sensor.Type.ToString(),
-            Value1 = e.Values.Count > 0 ? e.Values[0] : 0,
-            Value2 = e.Values.Count > 1 ? e.Values[1] : 0,
-            Value3 = e.Values.Count > 2 ? e.Values[2] : 0,
-            Timestamp = DateTime.Now
-        };
-
-        await _sensorDatabase.SaveSensorDataAsync(data);
-
-        Device.BeginInvokeOnMainThread(() =>
-        {
-            switch (e.Sensor.Type)
+            if (_stepCounter != null && _listener != null && _isListenerActive)
             {
-                case SensorType.StepCounter:
-                    ProcessStepCounter(e.Values[0]);
-                    break;
-
-                case SensorType.StepDetector:
-                    ProcessStepDetector();
-                    break;
-
-                case SensorType.Accelerometer:
-                    AccelerometerLabel.Text = $"X: {e.Values[0]:0.00}, Y: {e.Values[1]:0.00}, Z: {e.Values[2]:0.00}";
-
-                    if (_stepCounter == null && _stepDetector == null)
-                    {
-                        float x = e.Values[0];
-                        float y = e.Values[1];
-                        float z = e.Values[2];
-                        float acceleration = (float)Math.Sqrt(x * x + y * y + z * z);
-                        ProcessAccelerometerStepDetection(acceleration);
-                    }
-                    break;
-
-                case SensorType.Gyroscope:
-                    GyroscopeLabel.Text = $"X: {e.Values[0]:0.00}, Y: {e.Values[1]:0.00}, Z: {e.Values[2]:0.00}";
-                    break;
-
-                case SensorType.Light:
-                    LightLabel.Text = $"{e.Values[0]:0.00} lux";
-                    break;
+                _sensorManager.UnregisterListener(_listener);
+                _isListenerActive = false;
+                System.Diagnostics.Debug.WriteLine("Listener desregistrado");
             }
-        });
-    }
-
-    private void ProcessStepCounter(float sensorStepCount)
-    {
-        var today = DateTime.Today;
-
-        if (_isFirstStepReading)
-        {
-            _initialStepCount = (int)sensorStepCount;
-            _isFirstStepReading = false;
-
-            Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
         }
-
-        int currentDaySteps = (int)sensorStepCount - _initialStepCount;
-
-        if (currentDaySteps < 0)
+        catch (Exception ex)
         {
-            _initialStepCount = (int)sensorStepCount;
-            currentDaySteps = 0;
-            Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
+            System.Diagnostics.Debug.WriteLine($"Error desregistrando listener: {ex.Message}");
         }
-
-        _stepCount = currentDaySteps;
-
-        Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
-
-        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
-        UpdateStepsRemaining();
     }
 
-    private void ProcessStepDetector()
+    private void OnSensorChanged(SensorEvent e)
     {
-        var today = DateTime.Today;
-
-        _stepCount++;
-
-        Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
-
-        StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
-        UpdateStepsRemaining();
-    }
-
-    private void ProcessAccelerometerStepDetection(float currentAcceleration)
-    {
-        const float threshold = 1.5f;
-        const int stepDelayMs = 250;
-
-        float deviation = Math.Abs(currentAcceleration - 9.8f);
-
-        if (deviation > threshold && currentAcceleration < _lastAccelerationBackup)
+        try
         {
-            long currentTime = DateTimeOffset.Now.ToUnixTimeMilliseconds();
-
-            if (currentTime - _lastStepTimeBackup > stepDelayMs)
+            if (e.Sensor.Type == SensorType.StepCounter)
             {
+                int sensorValue = (int)e.Values[0];
                 var today = DateTime.Today;
-                _stepCount++;
-                _lastStepTimeBackup = currentTime;
 
+                System.Diagnostics.Debug.WriteLine($"Valor del sensor: {sensorValue}");
+
+                if (_initialStepCount == -1)
+                {
+                    _initialStepCount = sensorValue;
+                    Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
+                    System.Diagnostics.Debug.WriteLine($"Valor inicial establecido: {_initialStepCount}");
+                }
+
+                int currentDaySteps = sensorValue - _initialStepCount;
+                if (currentDaySteps < 0)
+                {
+                    _initialStepCount = sensorValue;
+                    currentDaySteps = 0;
+                    Preferences.Set($"initial_steps_{today:yyyy-MM-dd}", _initialStepCount);
+                    System.Diagnostics.Debug.WriteLine("Sensor resetado, reiniciando conteo");
+                }
+
+                _stepCount = currentDaySteps;
                 Preferences.Set($"steps_{today:yyyy-MM-dd}", _stepCount);
 
-                StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
-                UpdateStepsRemaining();
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    StepCounterLabel.Text = $"Pasos dados: {_stepCount}";
+                    UpdateStepsRemaining();
+                });
+
+                System.Diagnostics.Debug.WriteLine($"Pasos actualizados: {_stepCount}");
             }
         }
-
-        _lastAccelerationBackup = currentAcceleration;
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Error en OnSensorChanged: {ex.Message}");
+        }
     }
 #endif
 
@@ -302,7 +421,7 @@ public partial class MainPage : ContentPage
             if (remaining == 0)
             {
                 StepsRemainingLabel.TextColor = Colors.Green;
-                CheckAndShowGoalReachedMessage(_stepCount, goal);
+                DisplayAlert("¡Felicidades!", "Has alcanzado tu meta diaria de pasos.", "OK");
             }
             else
             {
@@ -315,16 +434,6 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private void CheckAndShowGoalReachedMessage(int steps, int goal)
-    {
-        if (steps >= goal)
-        {
-            DisplayAlert("¡Felicidades!", "Has alcanzado tu meta diaria de pasos.", "OK");
-        }
-    }
-
-    // Métodos para eventos del XAML (siempre visibles)
-
     private async void OnResetAgeClicked(object sender, EventArgs e)
     {
         Preferences.Remove("user_age");
@@ -336,31 +445,60 @@ public partial class MainPage : ContentPage
         _stepCount = 0;
         StepCounterLabel.Text = "Pasos dados: 0";
 
-        await CheckAndAskAgeAsync();
+        CheckAndAskAgeAsync();
     }
 
     private async void OnResetStepsClicked(object sender, EventArgs e)
     {
-        var result = await DisplayAlert("Confirmar",
-            "¿Estás seguro de que quieres reiniciar el contador de pasos de hoy?",
-            "Sí", "No");
-
+        var result = await DisplayAlert("Confirmar", "¿Quieres reiniciar el conteo de pasos de hoy?", "Sí", "No");
         if (result)
         {
             var today = DateTime.Today;
             _stepCount = 0;
-            _isFirstStepReading = true;
+            _initialStepCount = -1;
 
             Preferences.Remove($"steps_{today:yyyy-MM-dd}");
             Preferences.Remove($"initial_steps_{today:yyyy-MM-dd}");
 
             StepCounterLabel.Text = "Pasos dados: 0";
             UpdateStepsRemaining();
+
+#if ANDROID
+            // Reiniciar el listener del sensor
+            UnregisterSensorListener();
+            await Task.Delay(100);
+            RegisterSensorListener();
+#endif
         }
     }
 
     private async void OnViewHistoryClicked(object sender, EventArgs e)
     {
-        await Navigation.PushAsync(new SensorDataPage());
+        await DisplayAlert("Historial", "Funcionalidad de historial no implementada aún.", "OK");
+    }
+
+    // Método para debug - puedes agregarlo temporalmente
+    private async void OnTestSensorClicked(object sender, EventArgs e)
+    {
+#if ANDROID
+        if (_sensorManager != null && _stepCounter != null)
+        {
+            bool hasPermission = CheckActivityRecognitionPermissionNative();
+
+            await DisplayAlert("Info del Sensor",
+                $"Sensor disponible: {_stepCounter.Name}\n" +
+                $"Listener activo: {_isListenerActive}\n" +
+                $"Pasos actuales: {_stepCount}\n" +
+                $"Valor inicial: {_initialStepCount}\n" +
+                $"Permiso concedido: {hasPermission}",
+                "OK");
+        }
+        else
+        {
+            await DisplayAlert("Error", "Sensor no inicializado", "OK");
+        }
+#else
+        await DisplayAlert("Info", "Esta funcionalidad solo está disponible en Android", "OK");
+#endif
     }
 }
